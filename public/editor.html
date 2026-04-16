@@ -135,9 +135,9 @@
 
 <!-- Monaco Editor -->
 <script>
-const require = { paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } };
+var require = { paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } };
 </script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
 <script>
 let editors = {};
 let activeEditorTab = 'html';
@@ -334,9 +334,9 @@ async function loadFromUrl() {
   document.getElementById('mg-left').value      = t.margin_left;
   document.title = `${t.name} — PDF Forge`;
 
-  editors.html.setValue(t.html || DEFAULT_HTML);
-  editors.css.setValue(t.css   || DEFAULT_CSS);
-  editors.data.setValue(t.sample_data || DEFAULT_DATA);
+  editors.html.setValue(t.html != null ? t.html : DEFAULT_HTML);
+  editors.css.setValue(t.css  != null ? t.css  : DEFAULT_CSS);
+  editors.data.setValue(t.sample_data && t.sample_data !== '{}' ? t.sample_data : DEFAULT_DATA);
   updateVarsBar();
   scheduleLivePreview();
 }
