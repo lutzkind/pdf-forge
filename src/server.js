@@ -1,6 +1,8 @@
-const express = require('express');
-const path    = require('path');
-const fs      = require('fs');
+const express  = require('express');
+const session  = require('express-session');
+const path     = require('path');
+const fs       = require('fs');
+const axios    = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const Handlebars = require('handlebars');
 
@@ -11,11 +13,31 @@ const { generatePdf } = require('./pdf');
 const app  = express();
 const PDFS = path.join(DATA_DIR, 'pdfs');
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.static(path.join(__dirname, '../public')));
-app.use('/files', express.static(PDFS));
+// ── Config ────────────────────────────────────────────────────────
+const ADMIN_USER = process.env.ADMIN_USER || 'admin';
+const ADMIN_PASS = process.env.ADMIN_PASS || 'changeme';
+const SESSION_SECRET = process.env.SESSION_SECRET || uuidv4();
 
-// ── Auth ──────────────────────────────────────────────────────────
+// ── Middleware ────────────────────────────────────────────────────
+app.use(express.json({ limit: '10mb' }));
+app.use(session({
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 7 * 24 * 60 * 60 * 1000 }, // 7 days
+}));
+
+// ── Auth helpers ──────────────────────────────────────────────────
+function isLoggedIn(req) {
+  return req.session && req.session.authenticated;
+}
+
+function requireLogin(req, res, next) {
+  if (isLoggedIn(req)) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Login required' });
+  res.redirect('/login.html');
+}
+
 function requireApiKey(req, res, next) {
   const key = req.headers['x-api-key'] || req.query.api_key;
   if (!key) return res.status(401).json({ error: 'x-api-key header required' });
@@ -24,8 +46,64 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-// ── Health ────────────────────────────────────────────────────────
+// ── Public routes (no auth) ───────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+app.get('/login.html', (_req, res) => {
+  res.sendFile(path.join(__dirname, '../public/login.html'));
+});
+
+app.post('/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  if (username === ADMIN_USER && password === ADMIN_PASS) {
+    req.session.authenticated = true;
+    res.json({ ok: true });
+  } else {
+    res.status(401).json({ error: 'Invalid credentials' });
+  }
+});
+
+app.post('/auth/logout', (req, res) => {
+  req.session.destroy();
+  res.json({ ok: true });
+});
+
+// Document generation endpoint — uses API key, no session required
+app.post('/api/documents', requireApiKey, async (req, res) => {
+  const { template_id, data = {} } = req.body;
+  if (!template_id) return res.status(400).json({ error: 'template_id is required' });
+
+  const t = db.prepare('SELECT * FROM templates WHERE id = ? OR slug = ?').get(template_id, template_id);
+  if (!t) return res.status(404).json({ error: 'Template not found' });
+
+  const docId = uuidv4();
+  db.prepare('INSERT INTO documents (id, template_id, data, status) VALUES (?, ?, ?, ?)')
+    .run(docId, t.id, JSON.stringify(data), 'processing');
+
+  try {
+    const rendered = Handlebars.compile(t.html)(data);
+    const fullHtml = buildHtml(rendered, t.css);
+    const pdfBuf  = await generatePdf(fullHtml, t);
+    const filename = `${docId}.pdf`;
+
+    fs.writeFileSync(path.join(PDFS, filename), pdfBuf);
+    db.prepare('UPDATE documents SET status = ?, filename = ? WHERE id = ?').run('done', filename, docId);
+
+    const base = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+    res.json({ id: docId, status: 'done', url: `${base}/files/${filename}`, template_id: t.id, template_slug: t.slug });
+  } catch (e) {
+    db.prepare('UPDATE documents SET status = ?, error = ? WHERE id = ?').run('error', e.message, docId);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Protected static files ────────────────────────────────────────
+app.use('/files', express.static(PDFS));
+
+// All other routes require login
+app.use(requireLogin);
+
+app.use(express.static(path.join(__dirname, '../public')));
 
 // ── Templates ─────────────────────────────────────────────────────
 app.get('/api/templates', (_req, res) => {
@@ -40,8 +118,8 @@ app.post('/api/templates', (req, res) => {
           margin_top = 1, margin_right = 1, margin_bottom = 1, margin_left = 1 } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
 
-  const id  = uuidv4();
-  const sl  = slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const id = uuidv4();
+  const sl = slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
   try {
     db.prepare(`INSERT INTO templates
@@ -68,17 +146,11 @@ app.put('/api/templates/:id', (req, res) => {
 
   const fields = ['name','slug','html','css','sample_data','page_size','orientation',
                   'margin_top','margin_right','margin_bottom','margin_left'];
-  const updates = [];
-  const vals    = [];
-
+  const updates = [], vals = [];
   for (const f of fields) {
-    if (req.body[f] !== undefined) {
-      updates.push(`${f} = ?`);
-      vals.push(req.body[f]);
-    }
+    if (req.body[f] !== undefined) { updates.push(`${f} = ?`); vals.push(req.body[f]); }
   }
   if (!updates.length) return res.json(t);
-
   updates.push('updated_at = CURRENT_TIMESTAMP');
   vals.push(req.params.id);
   db.prepare(`UPDATE templates SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
@@ -90,32 +162,23 @@ app.delete('/api/templates/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ── Preview (HTML render — no auth, used by editor) ───────────────
+// ── Preview ───────────────────────────────────────────────────────
 app.post('/api/templates/:id/preview', async (req, res) => {
   const t = db.prepare('SELECT * FROM templates WHERE id = ? OR slug = ?').get(req.params.id, req.params.id);
   if (!t) return res.status(404).json({ error: 'Template not found' });
-
   let data = {};
   try { data = req.body.data || JSON.parse(t.sample_data || '{}'); } catch (_) {}
-
   try {
     const rendered = Handlebars.compile(t.html)(data);
     const fullHtml = buildHtml(rendered, t.css);
-
     if (req.query.format === 'pdf') {
       const buf = await generatePdf(fullHtml, t);
-      res.set('Content-Type', 'application/pdf');
-      return res.send(buf);
+      res.set('Content-Type', 'application/pdf'); return res.send(buf);
     }
-
-    res.set('Content-Type', 'text/html');
-    res.send(fullHtml);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
+    res.set('Content-Type', 'text/html'); res.send(fullHtml);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// Quick HTML-only preview from raw body (editor live preview — no DB save needed)
 app.post('/api/preview-raw', async (req, res) => {
   const { html = '', css = '', data = {}, format } = req.body;
   try {
@@ -123,56 +186,17 @@ app.post('/api/preview-raw', async (req, res) => {
     const fullHtml = buildHtml(rendered, css);
     if (format === 'pdf') {
       const buf = await generatePdf(fullHtml, req.body);
-      res.set('Content-Type', 'application/pdf');
-      return res.send(buf);
+      res.set('Content-Type', 'application/pdf'); return res.send(buf);
     }
-    res.set('Content-Type', 'text/html');
-    res.send(fullHtml);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
+    res.set('Content-Type', 'text/html'); res.send(fullHtml);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ── Documents ─────────────────────────────────────────────────────
-app.post('/api/documents', requireApiKey, async (req, res) => {
-  const { template_id, data = {} } = req.body;
-  if (!template_id) return res.status(400).json({ error: 'template_id is required' });
-
-  const t = db.prepare('SELECT * FROM templates WHERE id = ? OR slug = ?').get(template_id, template_id);
-  if (!t) return res.status(404).json({ error: 'Template not found' });
-
-  const docId = uuidv4();
-  db.prepare('INSERT INTO documents (id, template_id, data, status) VALUES (?, ?, ?, ?)')
-    .run(docId, t.id, JSON.stringify(data), 'processing');
-
-  try {
-    const rendered  = Handlebars.compile(t.html)(data);
-    const fullHtml  = buildHtml(rendered, t.css);
-    const pdfBuf    = await generatePdf(fullHtml, t);
-    const filename  = `${docId}.pdf`;
-
-    fs.writeFileSync(path.join(PDFS, filename), pdfBuf);
-    db.prepare('UPDATE documents SET status = ?, filename = ? WHERE id = ?').run('done', filename, docId);
-
-    const base = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
-    res.json({
-      id:            docId,
-      status:        'done',
-      url:           `${base}/files/${filename}`,
-      template_id:   t.id,
-      template_slug: t.slug,
-    });
-  } catch (e) {
-    db.prepare('UPDATE documents SET status = ?, error = ? WHERE id = ?').run('error', e.message, docId);
-    res.status(500).json({ error: e.message });
-  }
-});
-
 app.get('/api/documents', (_req, res) => {
   const docs = db.prepare(`
     SELECT d.*, t.name AS template_name, t.slug AS template_slug
-    FROM documents d
-    LEFT JOIN templates t ON d.template_id = t.id
+    FROM documents d LEFT JOIN templates t ON d.template_id = t.id
     ORDER BY d.created_at DESC LIMIT 200
   `).all();
   const base = process.env.BASE_URL || 'http://localhost:3000';
@@ -205,13 +229,79 @@ app.delete('/api/keys/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── PDFMonkey Import ──────────────────────────────────────────────
+app.post('/api/import/pdfmonkey', async (req, res) => {
+  const { api_key } = req.body;
+  if (!api_key) return res.status(400).json({ error: 'api_key required' });
+
+  let templates;
+  try {
+    const r = await axios.get('https://api.pdfmonkey.io/api/v1/document_templates', {
+      headers: { Authorization: `Bearer ${api_key}` },
+      timeout: 15000,
+    });
+    templates = r.data.document_templates || [];
+  } catch (e) {
+    return res.status(400).json({ error: 'PDFMonkey API error: ' + (e.response?.data?.error || e.message) });
+  }
+
+  const FORMAT_MAP = { a4:'A4', a3:'A3', a5:'A5', letter:'Letter', legal:'Legal', tabloid:'Tabloid' };
+  const MM_TO_IN = 0.0393701;
+
+  const results = [];
+  for (const t of templates) {
+    const settings = t.settings || {};
+    const margins  = settings.margin || {};
+    const slug = (t.identifier || t.id)
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+
+    // Make slug unique if collision
+    let finalSlug = slug;
+    let attempt   = 0;
+    while (db.prepare('SELECT id FROM templates WHERE slug = ?').get(finalSlug)) {
+      attempt++;
+      finalSlug = `${slug}-${attempt}`;
+    }
+
+    const sampleData = (() => {
+      try { return JSON.stringify(JSON.parse(t.sample_payload || t.sample_data || '{}'), null, 2); }
+      catch { return '{}'; }
+    })();
+
+    const id = uuidv4();
+    try {
+      db.prepare(`INSERT INTO templates
+        (id, name, slug, html, css, sample_data, page_size, orientation, margin_top, margin_right, margin_bottom, margin_left)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        t.identifier || t.id,
+        finalSlug,
+        t.body || '',
+        t.stylesheet || t.scss_style || '',
+        sampleData,
+        FORMAT_MAP[settings.paper_format] || 'A4',
+        settings.orientation || 'portrait',
+        (margins.top  || 0) * MM_TO_IN,
+        (margins.right || 0) * MM_TO_IN,
+        (margins.bottom || 0) * MM_TO_IN,
+        (margins.left || 0) * MM_TO_IN,
+      );
+      results.push({ id, name: t.identifier || t.id, slug: finalSlug, status: 'imported' });
+    } catch (e) {
+      results.push({ name: t.identifier || t.id, status: 'error', error: e.message });
+    }
+  }
+
+  res.json({ imported: results.filter(r => r.status === 'imported').length, total: templates.length, results });
+});
+
 // ── Helpers ───────────────────────────────────────────────────────
 function buildHtml(body, css = '') {
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px}

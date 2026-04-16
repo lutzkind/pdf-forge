@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Forge — Login</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0f1117;
+    color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .card {
+    background: #1a1d27;
+    border: 1px solid #2d3148;
+    border-radius: 16px;
+    padding: 40px;
+    width: 100%;
+    max-width: 380px;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 32px;
+  }
+  .logo-icon {
+    width: 40px; height: 40px;
+    background: #6366f1;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 16px; color: white;
+  }
+  .logo-text { font-size: 20px; font-weight: 600; }
+  .logo-sub  { font-size: 12px; color: #64748b; margin-top: 1px; }
+  label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px; }
+  .field { margin-bottom: 18px; }
+  input {
+    width: 100%;
+    background: #0f1117;
+    border: 1px solid #2d3148;
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #e2e8f0;
+    font-size: 14px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  input:focus { border-color: #6366f1; }
+  button {
+    width: 100%;
+    background: #6366f1;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 11px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background .15s;
+    margin-top: 4px;
+  }
+  button:hover  { background: #4f46e5; }
+  button:disabled { opacity: .6; cursor: not-allowed; }
+  .error {
+    background: #3f1515;
+    border: 1px solid #7f1d1d;
+    color: #fca5a5;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 18px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">PF</div>
+    <div>
+      <div class="logo-text">PDF Forge</div>
+      <div class="logo-sub">Template Engine</div>
+    </div>
+  </div>
+
+  <div class="error" id="error-msg"></div>
+
+  <form id="login-form">
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" type="text" autocomplete="username" autofocus />
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" />
+    </div>
+    <button type="submit" id="submit-btn">Sign in</button>
+  </form>
+</div>
+
+<script>
+document.getElementById('login-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('submit-btn');
+  const err = document.getElementById('error-msg');
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  err.style.display = 'none';
+
+  const res = await fetch('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: document.getElementById('username').value,
+      password: document.getElementById('password').value,
+    }),
+  });
+
+  if (res.ok) {
+    window.location.href = '/';
+  } else {
+    const d = await res.json();
+    err.textContent = d.error || 'Invalid credentials';
+    err.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  }
+});
+
+// Submit on Enter
+document.getElementById('password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('login-form').dispatchEvent(new Event('submit'));
+});
+</script>
+</body>
+</html>
