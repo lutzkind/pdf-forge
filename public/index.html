@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Forge</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0f1117; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; }
+  .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 12px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+  .btn-primary { background: #6366f1; color: white; border-radius: 8px; padding: 8px 16px; font-size: 14px; font-weight: 500; transition: background .15s; cursor: pointer; border: none; }
+  .btn-primary:hover { background: #4f46e5; }
+  .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #2d3148; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; transition: all .15s; }
+  .btn-ghost:hover { color: #e2e8f0; border-color: #6366f1; }
+  .btn-danger { background: transparent; color: #f87171; border: 1px solid #3f1515; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  .btn-danger:hover { background: #3f1515; }
+  .input { background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; padding: 8px 12px; color: #e2e8f0; font-size: 14px; outline: none; }
+  .input:focus { border-color: #6366f1; }
+  .tab { padding: 8px 16px; font-size: 14px; cursor: pointer; border-bottom: 2px solid transparent; color: #64748b; transition: all .15s; }
+  .tab.active { color: #6366f1; border-color: #6366f1; }
+  .mono { font-family: 'Menlo', 'Monaco', 'Courier New', monospace; font-size: 12px; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2d3148; border-radius: 3px; }
+  .template-card:hover { border-color: #6366f1; }
+  .tag { font-size: 11px; background: #1e2133; color: #818cf8; padding: 2px 8px; border-radius: 4px; font-family: monospace; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- Header -->
+<header class="border-b border-[#2d3148] px-6 py-4 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center text-white font-bold text-sm">PF</div>
+    <span class="font-semibold text-lg">PDF Forge</span>
+  </div>
+  <div class="flex gap-3">
+    <button class="tab active" onclick="showTab('templates')">Templates</button>
+    <button class="tab" onclick="showTab('documents')">Documents</button>
+    <button class="tab" onclick="showTab('keys')">API Keys</button>
+  </div>
+  <button class="btn-primary" onclick="newTemplate()">+ New Template</button>
+</header>
+
+<!-- Main -->
+<main class="max-w-6xl mx-auto px-6 py-8">
+
+  <!-- Templates Tab -->
+  <section id="tab-templates">
+    <div id="templates-empty" class="hidden text-center py-24">
+      <div class="text-6xl mb-4">📄</div>
+      <p class="text-slate-400 text-lg mb-2">No templates yet</p>
+      <p class="text-slate-600 text-sm mb-6">Create your first template to start generating PDFs</p>
+      <button class="btn-primary" onclick="newTemplate()">+ Create Template</button>
+    </div>
+    <div id="templates-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+  </section>
+
+  <!-- Documents Tab -->
+  <section id="tab-documents" class="hidden">
+    <div class="card overflow-hidden">
+      <div class="px-5 py-4 border-b border-[#2d3148] flex items-center justify-between">
+        <h2 class="font-semibold">Generated Documents</h2>
+        <button class="btn-ghost text-xs" onclick="loadDocuments()">Refresh</button>
+      </div>
+      <div id="documents-list" class="divide-y divide-[#2d3148]"></div>
+      <div id="documents-empty" class="hidden text-center py-12 text-slate-500">No documents generated yet</div>
+    </div>
+  </section>
+
+  <!-- API Keys Tab -->
+  <section id="tab-keys" class="hidden">
+    <div class="grid gap-6">
+      <div class="card p-5">
+        <h2 class="font-semibold mb-1">Create API Key</h2>
+        <p class="text-slate-500 text-sm mb-4">Use these keys to call <code class="text-indigo-400">/api/documents</code> from n8n or any HTTP client.</p>
+        <div class="flex gap-3">
+          <input id="key-name" class="input flex-1" placeholder="Key name (e.g. n8n-production)" />
+          <button class="btn-primary" onclick="createKey()">Create Key</button>
+        </div>
+      </div>
+
+      <div class="card overflow-hidden">
+        <div class="px-5 py-4 border-b border-[#2d3148]">
+          <h2 class="font-semibold">Active Keys</h2>
+        </div>
+        <div id="keys-list" class="divide-y divide-[#2d3148]"></div>
+        <div id="keys-empty" class="hidden text-center py-8 text-slate-500 text-sm">No API keys yet</div>
+      </div>
+
+      <div class="card p-5">
+        <h2 class="font-semibold mb-3">n8n Integration</h2>
+        <p class="text-slate-500 text-sm mb-3">In n8n, use an <strong class="text-slate-300">HTTP Request</strong> node:</p>
+        <div class="bg-[#0f1117] rounded-lg p-4 mono text-sm text-slate-300 space-y-1">
+          <div><span class="text-green-400">Method:</span> POST</div>
+          <div><span class="text-green-400">URL:</span> <span id="api-url-display">https://pdf.luxeillum.com</span>/api/documents</div>
+          <div><span class="text-green-400">Header:</span> x-api-key: pfk_your_key_here</div>
+          <div class="pt-2 text-slate-500">Body (JSON):</div>
+          <div class="pl-2 text-yellow-300">{</div>
+          <div class="pl-4">"template_id": <span class="text-green-300">"your-template-slug"</span>,</div>
+          <div class="pl-4">"data": <span class="text-green-300">{"{{ $json }}"}</span></div>
+          <div class="pl-2 text-yellow-300">}</div>
+        </div>
+        <p class="text-slate-500 text-xs mt-3">Response includes <code class="text-indigo-400">url</code> — a direct link to the generated PDF.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- Delete Template Modal -->
+<div id="delete-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+  <div class="card p-6 max-w-sm w-full mx-4">
+    <h3 class="font-semibold mb-2">Delete Template?</h3>
+    <p class="text-slate-400 text-sm mb-5">This will permanently delete the template and all associated documents.</p>
+    <div class="flex gap-3 justify-end">
+      <button class="btn-ghost" onclick="closeDeleteModal()">Cancel</button>
+      <button class="btn-danger" onclick="confirmDelete()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let activeTab = 'templates';
+let deleteTargetId = null;
+
+const API = '';
+
+// ── Tabs ──────────────────────────────────────────────────────────
+function showTab(name) {
+  activeTab = name;
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden'));
+  document.getElementById(`tab-${name}`).classList.remove('hidden');
+  document.querySelectorAll('.tab').forEach((el, i) => {
+    el.classList.toggle('active', ['templates','documents','keys'][i] === name);
+  });
+  if (name === 'documents') loadDocuments();
+  if (name === 'keys')      loadKeys();
+}
+
+// ── Templates ─────────────────────────────────────────────────────
+async function loadTemplates() {
+  const res = await fetch(`${API}/api/templates`);
+  const templates = await res.json();
+  const grid  = document.getElementById('templates-grid');
+  const empty = document.getElementById('templates-empty');
+
+  if (!templates.length) { empty.classList.remove('hidden'); grid.innerHTML = ''; return; }
+  empty.classList.add('hidden');
+
+  grid.innerHTML = templates.map(t => `
+    <div class="card template-card p-5 transition-all cursor-pointer" onclick="editTemplate('${t.id}')">
+      <div class="flex items-start justify-between mb-3">
+        <div>
+          <h3 class="font-semibold text-sm mb-1">${esc(t.name)}</h3>
+          <span class="tag">${esc(t.slug)}</span>
+        </div>
+        <div class="flex gap-1 ml-2">
+          <button class="btn-ghost text-xs py-1 px-2" onclick="event.stopPropagation();editTemplate('${t.id}')">Edit</button>
+          <button class="btn-danger text-xs py-1 px-2" onclick="event.stopPropagation();openDeleteModal('${t.id}')">Del</button>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 mt-3 text-xs text-slate-500">
+        <span class="badge bg-[#1e2133] text-slate-400">${t.page_size}</span>
+        <span class="badge bg-[#1e2133] text-slate-400">${t.orientation}</span>
+        <span class="ml-auto">${timeAgo(t.updated_at)}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function newTemplate() {
+  window.location.href = '/editor.html';
+}
+
+function editTemplate(id) {
+  window.location.href = `/editor.html?id=${id}`;
+}
+
+// ── Delete Modal ──────────────────────────────────────────────────
+function openDeleteModal(id) {
+  deleteTargetId = id;
+  document.getElementById('delete-modal').classList.remove('hidden');
+}
+function closeDeleteModal() {
+  deleteTargetId = null;
+  document.getElementById('delete-modal').classList.add('hidden');
+}
+async function confirmDelete() {
+  if (!deleteTargetId) return;
+  await fetch(`${API}/api/templates/${deleteTargetId}`, { method: 'DELETE' });
+  closeDeleteModal();
+  loadTemplates();
+}
+
+// ── Documents ─────────────────────────────────────────────────────
+async function loadDocuments() {
+  const res  = await fetch(`${API}/api/documents`);
+  const docs = await res.json();
+  const list  = document.getElementById('documents-list');
+  const empty = document.getElementById('documents-empty');
+
+  if (!docs.length) { empty.classList.remove('hidden'); list.innerHTML = ''; return; }
+  empty.classList.add('hidden');
+
+  list.innerHTML = docs.map(d => `
+    <div class="px-5 py-3 flex items-center justify-between hover:bg-white/2">
+      <div>
+        <div class="text-sm font-medium mb-0.5">${d.template_name || d.template_id}</div>
+        <div class="text-xs text-slate-500 mono">${d.id.slice(0,8)}… · ${timeAgo(d.created_at)}</div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="badge ${d.status === 'done' ? 'bg-green-900/40 text-green-400' : d.status === 'error' ? 'bg-red-900/40 text-red-400' : 'bg-yellow-900/40 text-yellow-400'}">${d.status}</span>
+        ${d.url ? `<a href="${d.url}" target="_blank" class="btn-ghost text-xs py-1 px-2">PDF</a>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── API Keys ──────────────────────────────────────────────────────
+async function loadKeys() {
+  const res  = await fetch(`${API}/api/keys`);
+  const keys = await res.json();
+  const list  = document.getElementById('keys-list');
+  const empty = document.getElementById('keys-empty');
+
+  if (!keys.length) { empty.classList.remove('hidden'); list.innerHTML = ''; return; }
+  empty.classList.add('hidden');
+
+  list.innerHTML = keys.map(k => `
+    <div class="px-5 py-3 flex items-center justify-between">
+      <div>
+        <div class="text-sm font-medium mb-0.5">${esc(k.name)}</div>
+        <div class="mono text-xs text-indigo-400 cursor-pointer" onclick="copyText('${k.key}', this)" title="Click to copy">${k.key}</div>
+      </div>
+      <button class="btn-danger text-xs py-1 px-2" onclick="deleteKey('${k.id}')">Revoke</button>
+    </div>
+  `).join('');
+}
+
+async function createKey() {
+  const name = document.getElementById('key-name').value.trim();
+  if (!name) return;
+  await fetch(`${API}/api/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  document.getElementById('key-name').value = '';
+  loadKeys();
+}
+
+async function deleteKey(id) {
+  await fetch(`${API}/api/keys/${id}`, { method: 'DELETE' });
+  loadKeys();
+}
+
+// ── Utils ─────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function timeAgo(dateStr) {
+  const s = Math.floor((Date.now() - new Date(dateStr + 'Z')) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+
+async function copyText(text, el) {
+  await navigator.clipboard.writeText(text);
+  const orig = el.textContent;
+  el.textContent = 'Copied!';
+  el.classList.add('text-green-400');
+  setTimeout(() => { el.textContent = orig; el.classList.remove('text-green-400'); }, 1500);
+}
+
+// Update URL display
+document.getElementById('api-url-display').textContent = window.location.origin;
+
+// Init
+loadTemplates();
+</script>
+</body>
+</html>

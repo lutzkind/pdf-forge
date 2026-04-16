@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Forge — Editor</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { background: #0f1117; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+  .input { background: #0f1117; border: 1px solid #2d3148; border-radius: 6px; padding: 5px 10px; color: #e2e8f0; font-size: 13px; outline: none; width: 100%; }
+  .input:focus { border-color: #6366f1; }
+  select.input { cursor: pointer; }
+  .btn-primary { background: #6366f1; color: white; border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; white-space: nowrap; transition: background .15s; }
+  .btn-primary:hover { background: #4f46e5; }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #2d3148; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; transition: all .15s; white-space: nowrap; }
+  .btn-ghost:hover { color: #e2e8f0; border-color: #6366f1; }
+  .btn-green { background: #15803d; color: white; border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; white-space: nowrap; }
+  .btn-green:hover { background: #166534; }
+  .editor-tab { padding: 6px 14px; font-size: 12px; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; color: #64748b; transition: all .15s; white-space: nowrap; }
+  .editor-tab.active { color: #818cf8; border-color: #6366f1; }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2d3148; border-radius: 2px; }
+  #preview-frame { width: 100%; height: 100%; border: none; background: white; }
+  .panel-resize { width: 4px; background: #2d3148; cursor: col-resize; flex-shrink: 0; transition: background .1s; }
+  .panel-resize:hover { background: #6366f1; }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .spinner { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tag-chip { font-family: monospace; font-size: 11px; background: #1e2133; color: #818cf8; padding: 2px 6px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+  .tag-chip:hover { background: #2d3148; }
+  .side-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #475569; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- Topbar -->
+<header class="flex items-center gap-3 px-4 py-2.5 border-b border-[#2d3148] flex-shrink-0" style="min-height:52px">
+  <a href="/" class="text-slate-500 hover:text-slate-300 text-sm">← Templates</a>
+  <div class="w-px h-4 bg-[#2d3148]"></div>
+  <input id="tpl-name" class="input" style="max-width:220px" placeholder="Template name" />
+  <input id="tpl-slug" class="input font-mono" style="max-width:180px;font-size:12px" placeholder="slug (auto)" />
+
+  <div class="flex items-center gap-1.5 ml-2">
+    <span class="side-label">Size</span>
+    <select id="tpl-size" class="input" style="width:90px">
+      <option>A4</option><option>A3</option><option>A5</option>
+      <option>Letter</option><option>Legal</option><option>Tabloid</option>
+    </select>
+    <select id="tpl-orient" class="input" style="width:100px">
+      <option value="portrait">Portrait</option>
+      <option value="landscape">Landscape</option>
+    </select>
+  </div>
+
+  <div class="flex items-center gap-1.5">
+    <span class="side-label">Margins (in)</span>
+    <input id="mg-top"    class="input" style="width:46px" value="1" title="Top">
+    <input id="mg-right"  class="input" style="width:46px" value="1" title="Right">
+    <input id="mg-bottom" class="input" style="width:46px" value="1" title="Bottom">
+    <input id="mg-left"   class="input" style="width:46px" value="1" title="Left">
+  </div>
+
+  <div class="ml-auto flex items-center gap-2">
+    <div id="save-status" class="text-xs text-slate-500"></div>
+    <button class="btn-ghost" onclick="previewPdf()">
+      <span id="pdf-btn-label">Preview PDF</span>
+    </button>
+    <button class="btn-primary" onclick="saveTemplate()">
+      <span id="save-btn-label">Save</span>
+    </button>
+  </div>
+</header>
+
+<!-- Body: editor + preview -->
+<div class="flex flex-1 overflow-hidden">
+
+  <!-- Left: editor -->
+  <div id="editor-panel" class="flex flex-col" style="width:55%;min-width:300px">
+
+    <!-- Tabs -->
+    <div class="flex items-center border-b border-[#2d3148] px-2 gap-1 flex-shrink-0" style="height:36px">
+      <button class="editor-tab active" onclick="switchEditorTab('html')">HTML</button>
+      <button class="editor-tab"        onclick="switchEditorTab('css')">CSS</button>
+      <button class="editor-tab"        onclick="switchEditorTab('data')">Sample Data</button>
+      <div class="ml-auto flex items-center gap-2 pr-1">
+        <div id="preview-status" class="status-dot bg-slate-600" title="Preview status"></div>
+        <button class="text-xs text-slate-500 hover:text-slate-300" onclick="livePreview()">↻</button>
+      </div>
+    </div>
+
+    <!-- Monaco containers -->
+    <div class="flex-1 relative overflow-hidden">
+      <div id="monaco-html" class="absolute inset-0"></div>
+      <div id="monaco-css"  class="absolute inset-0 hidden"></div>
+      <div id="monaco-data" class="absolute inset-0 hidden"></div>
+    </div>
+
+    <!-- Variables helper -->
+    <div id="vars-bar" class="border-t border-[#2d3148] px-3 py-2 flex items-center gap-2 flex-wrap flex-shrink-0" style="min-height:38px;max-height:80px;overflow-y:auto">
+      <span class="side-label mr-1">Variables</span>
+      <span id="vars-list" class="flex flex-wrap gap-1 text-slate-500 text-xs">Parse Sample Data to see variables</span>
+    </div>
+  </div>
+
+  <!-- Resize handle -->
+  <div class="panel-resize" id="resizer"></div>
+
+  <!-- Right: preview -->
+  <div class="flex flex-col flex-1 overflow-hidden" style="min-width:200px">
+    <div class="flex items-center gap-2 px-3 border-b border-[#2d3148] flex-shrink-0" style="height:36px">
+      <span class="text-xs text-slate-500">Preview</span>
+      <div class="flex gap-1 ml-auto">
+        <button class="text-xs text-slate-500 hover:text-slate-300 px-2" onclick="setPreviewMode('html')" id="pm-html">HTML</button>
+        <button class="text-xs text-indigo-400 hover:text-indigo-300 px-2" onclick="setPreviewMode('pdf')"  id="pm-pdf">PDF</button>
+      </div>
+      <button class="text-xs text-slate-500 hover:text-slate-300" onclick="openFullPreview()">⤢</button>
+    </div>
+    <div class="flex-1 relative bg-[#1a1d27]">
+      <iframe id="preview-frame" src="about:blank"></iframe>
+      <div id="preview-loading" class="hidden absolute inset-0 flex items-center justify-center bg-[#1a1d27]/80">
+        <svg class="spinner w-6 h-6 text-indigo-400" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+        </svg>
+      </div>
+      <div id="preview-error" class="hidden absolute inset-0 flex items-center justify-center p-6">
+        <div class="text-red-400 text-sm text-center font-mono" id="preview-error-msg"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Monaco Editor -->
+<script>
+const require = { paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+<script>
+let editors = {};
+let activeEditorTab = 'html';
+let templateId = null;
+let previewMode = 'html';
+let livePreviewTimer = null;
+let isSaving = false;
+
+// ── Init Monaco ───────────────────────────────────────────────────
+require(['vs/editor/editor.main'], function() {
+  monaco.editor.defineTheme('forge-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: 'delimiter.handlebars', foreground: 'f59e0b' },
+      { token: 'variable.parameter.handlebars', foreground: 'a5f3fc' },
+    ],
+    colors: {
+      'editor.background': '#0f1117',
+      'editor.lineHighlightBackground': '#1a1d2799',
+      'editorLineNumber.foreground': '#374151',
+      'editorGutter.background': '#0f1117',
+    },
+  });
+
+  const commonOpts = {
+    theme: 'forge-dark',
+    fontSize: 13,
+    lineHeight: 20,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    wordWrap: 'on',
+    automaticLayout: true,
+    tabSize: 2,
+    renderLineHighlight: 'line',
+    smoothScrolling: true,
+  };
+
+  editors.html = monaco.editor.create(document.getElementById('monaco-html'), {
+    ...commonOpts, language: 'html',
+    value: DEFAULT_HTML,
+  });
+  editors.css = monaco.editor.create(document.getElementById('monaco-css'), {
+    ...commonOpts, language: 'css',
+    value: DEFAULT_CSS,
+  });
+  editors.data = monaco.editor.create(document.getElementById('monaco-data'), {
+    ...commonOpts, language: 'json',
+    value: DEFAULT_DATA,
+  });
+
+  // Live preview on change (debounced)
+  ['html','css','data'].forEach(k => {
+    editors[k].onDidChangeModelContent(() => scheduleLivePreview());
+  });
+  editors.data.onDidChangeModelContent(() => updateVarsBar());
+
+  loadFromUrl();
+  updateVarsBar();
+});
+
+// ── Default content ───────────────────────────────────────────────
+const DEFAULT_HTML = `<div class="page">
+  <header>
+    <h1>{{ title }}</h1>
+    <p class="subtitle">{{ subtitle }}</p>
+  </header>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>Qty</th>
+        <th>Price</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{#each items}}
+      <tr>
+        <td>{{ name }}</td>
+        <td>{{ qty }}</td>
+        <td>€{{ price }}</td>
+      </tr>
+      {{/each}}
+    </tbody>
+  </table>
+
+  <div class="total">
+    <strong>Total: €{{ total }}</strong>
+  </div>
+
+  <footer>
+    <p>Generated by PDF Forge · {{ date }}</p>
+  </footer>
+</div>`;
+
+const DEFAULT_CSS = `body {
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color: #1a1a2e;
+}
+
+.page {
+  padding: 40px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+header {
+  border-bottom: 3px solid #6366f1;
+  padding-bottom: 20px;
+  margin-bottom: 30px;
+}
+
+h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: #4f46e5;
+  margin: 0 0 6px;
+}
+
+.subtitle {
+  color: #64748b;
+  margin: 0;
+  font-size: 14px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-size: 14px;
+}
+
+th {
+  background: #f1f5f9;
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 600;
+  color: #475569;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+}
+
+.total {
+  text-align: right;
+  font-size: 16px;
+  margin: 16px 0;
+  color: #1e293b;
+}
+
+footer {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+  font-size: 11px;
+  color: #94a3b8;
+  text-align: center;
+}`;
+
+const DEFAULT_DATA = `{
+  "title": "Invoice #1042",
+  "subtitle": "Acme Corp · April 2025",
+  "date": "April 16, 2025",
+  "items": [
+    { "name": "Design work",  "qty": 3, "price": "800.00" },
+    { "name": "Consulting",   "qty": 1, "price": "500.00" },
+    { "name": "Hosting (yr)", "qty": 1, "price": "199.00" }
+  ],
+  "total": "2,699.00"
+}`;
+
+// ── Load template from URL param ──────────────────────────────────
+async function loadFromUrl() {
+  const params = new URLSearchParams(location.search);
+  templateId = params.get('id');
+  if (!templateId) { scheduleLivePreview(); return; }
+
+  const res = await fetch(`/api/templates/${templateId}`);
+  if (!res.ok) { alert('Template not found'); return; }
+  const t = await res.json();
+
+  document.getElementById('tpl-name').value     = t.name;
+  document.getElementById('tpl-slug').value     = t.slug;
+  document.getElementById('tpl-size').value     = t.page_size;
+  document.getElementById('tpl-orient').value   = t.orientation;
+  document.getElementById('mg-top').value       = t.margin_top;
+  document.getElementById('mg-right').value     = t.margin_right;
+  document.getElementById('mg-bottom').value    = t.margin_bottom;
+  document.getElementById('mg-left').value      = t.margin_left;
+  document.title = `${t.name} — PDF Forge`;
+
+  editors.html.setValue(t.html || DEFAULT_HTML);
+  editors.css.setValue(t.css   || DEFAULT_CSS);
+  editors.data.setValue(t.sample_data || DEFAULT_DATA);
+  updateVarsBar();
+  scheduleLivePreview();
+}
+
+// ── Editor tabs ───────────────────────────────────────────────────
+function switchEditorTab(tab) {
+  activeEditorTab = tab;
+  ['html','css','data'].forEach(k => {
+    document.getElementById(`monaco-${k}`).classList.toggle('hidden', k !== tab);
+  });
+  document.querySelectorAll('.editor-tab').forEach((el, i) => {
+    el.classList.toggle('active', ['html','css','data'][i] === tab);
+  });
+  editors[tab].focus();
+}
+
+// ── Preview ───────────────────────────────────────────────────────
+function scheduleLivePreview() {
+  clearTimeout(livePreviewTimer);
+  livePreviewTimer = setTimeout(livePreview, 700);
+}
+
+async function livePreview() {
+  const dot = document.getElementById('preview-status');
+  dot.className = 'status-dot bg-yellow-400';
+
+  const data = getSampleData();
+  const body = {
+    html: editors.html.getValue(),
+    css:  editors.css.getValue(),
+    data,
+    page_size:    document.getElementById('tpl-size').value,
+    orientation:  document.getElementById('tpl-orient').value,
+    margin_top:    parseFloat(document.getElementById('mg-top').value)    || 1,
+    margin_right:  parseFloat(document.getElementById('mg-right').value)  || 1,
+    margin_bottom: parseFloat(document.getElementById('mg-bottom').value) || 1,
+    margin_left:   parseFloat(document.getElementById('mg-left').value)   || 1,
+  };
+
+  const format = previewMode === 'pdf' ? '?format=pdf' : '';
+  setPreviewLoading(true);
+  hidePreviewError();
+
+  try {
+    const res = await fetch(`/api/preview-raw${format}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      showPreviewError(err.error || 'Render error');
+      dot.className = 'status-dot bg-red-400';
+      return;
+    }
+
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const frame = document.getElementById('preview-frame');
+    frame.src = url;
+    dot.className = 'status-dot bg-green-400';
+  } catch (e) {
+    showPreviewError(e.message);
+    dot.className = 'status-dot bg-red-400';
+  } finally {
+    setPreviewLoading(false);
+  }
+}
+
+async function previewPdf() {
+  const label = document.getElementById('pdf-btn-label');
+  label.textContent = 'Generating…';
+  await setPreviewMode('pdf');
+  await livePreview();
+  label.textContent = 'Preview PDF';
+}
+
+function setPreviewMode(mode) {
+  previewMode = mode;
+  document.getElementById('pm-html').className = `text-xs px-2 ${mode==='html' ? 'text-indigo-400' : 'text-slate-500 hover:text-slate-300'}`;
+  document.getElementById('pm-pdf').className  = `text-xs px-2 ${mode==='pdf'  ? 'text-indigo-400' : 'text-slate-500 hover:text-slate-300'}`;
+  livePreview();
+}
+
+function openFullPreview() {
+  const frame = document.getElementById('preview-frame');
+  window.open(frame.src, '_blank');
+}
+
+function setPreviewLoading(on) {
+  document.getElementById('preview-loading').classList.toggle('hidden', !on);
+}
+function showPreviewError(msg) {
+  const el = document.getElementById('preview-error');
+  document.getElementById('preview-error-msg').textContent = msg;
+  el.classList.remove('hidden');
+}
+function hidePreviewError() {
+  document.getElementById('preview-error').classList.add('hidden');
+}
+
+// ── Save ──────────────────────────────────────────────────────────
+async function saveTemplate() {
+  if (isSaving) return;
+  isSaving = true;
+  const label = document.getElementById('save-btn-label');
+  const status = document.getElementById('save-status');
+  label.textContent = 'Saving…';
+
+  const payload = {
+    name:        document.getElementById('tpl-name').value.trim() || 'Untitled',
+    slug:        document.getElementById('tpl-slug').value.trim() || undefined,
+    html:        editors.html.getValue(),
+    css:         editors.css.getValue(),
+    sample_data: editors.data.getValue(),
+    page_size:   document.getElementById('tpl-size').value,
+    orientation: document.getElementById('tpl-orient').value,
+    margin_top:    parseFloat(document.getElementById('mg-top').value)    || 1,
+    margin_right:  parseFloat(document.getElementById('mg-right').value)  || 1,
+    margin_bottom: parseFloat(document.getElementById('mg-bottom').value) || 1,
+    margin_left:   parseFloat(document.getElementById('mg-left').value)   || 1,
+  };
+
+  try {
+    let res;
+    if (templateId) {
+      res = await fetch(`/api/templates/${templateId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      res = await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+
+    if (!res.ok) {
+      const err = await res.json();
+      status.textContent = '✗ ' + (err.error || 'Save failed');
+      status.className = 'text-xs text-red-400';
+      return;
+    }
+
+    const t = await res.json();
+    if (!templateId) {
+      templateId = t.id;
+      history.replaceState(null, '', `/editor.html?id=${t.id}`);
+      document.getElementById('tpl-slug').value = t.slug;
+    }
+    document.title = `${t.name} — PDF Forge`;
+    status.textContent = 'Saved';
+    status.className = 'text-xs text-green-400';
+    setTimeout(() => { status.textContent = ''; }, 2000);
+  } finally {
+    label.textContent = 'Save';
+    isSaving = false;
+  }
+}
+
+// ── Variables bar ─────────────────────────────────────────────────
+function updateVarsBar() {
+  const container = document.getElementById('vars-list');
+  const data = getSampleData();
+  const vars = flattenKeys(data);
+  if (!vars.length) {
+    container.innerHTML = '<span class="text-slate-600 text-xs">No variables in sample data</span>';
+    return;
+  }
+  container.innerHTML = vars.map(v =>
+    `<span class="tag-chip" onclick="insertVar('${v}')" title="Click to insert">{{${v}}}</span>`
+  ).join('');
+}
+
+function flattenKeys(obj, prefix = '') {
+  const keys = [];
+  for (const [k, v] of Object.entries(obj || {})) {
+    const full = prefix ? `${prefix}.${k}` : k;
+    if (Array.isArray(v)) {
+      keys.push(`#each ${full}`);
+      if (v[0] && typeof v[0] === 'object') keys.push(...flattenKeys(v[0], '').map(s => `  ${s}`));
+    } else if (v && typeof v === 'object') {
+      keys.push(...flattenKeys(v, full));
+    } else {
+      keys.push(full);
+    }
+  }
+  return keys;
+}
+
+function insertVar(v) {
+  const editor = editors[activeEditorTab === 'data' ? 'html' : activeEditorTab];
+  const sel = editor.getSelection();
+  const text = v.startsWith('#each') ? `{{${v}}}\n  \n{{/${v.slice(6)}}}`  : `{{ ${v} }}`;
+  editor.executeEdits('', [{ range: sel, text }]);
+  editor.focus();
+  if (activeEditorTab === 'data') switchEditorTab('html');
+}
+
+function getSampleData() {
+  try { return JSON.parse(editors.data.getValue()); } catch { return {}; }
+}
+
+// ── Panel resize ──────────────────────────────────────────────────
+(function() {
+  const resizer = document.getElementById('resizer');
+  const panel   = document.getElementById('editor-panel');
+  let dragging  = false, startX = 0, startW = 0;
+
+  resizer.addEventListener('mousedown', e => {
+    dragging = true;
+    startX = e.clientX;
+    startW = panel.offsetWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const w = Math.max(280, Math.min(startW + e.clientX - startX, window.innerWidth - 200));
+    panel.style.width = w + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+})();
+
+// ── Keyboard shortcuts ────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveTemplate();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {
+    e.preventDefault();
+    previewPdf();
+  }
+});
+
+// Auto-slug from name
+document.getElementById('tpl-name').addEventListener('input', e => {
+  if (!templateId) {
+    document.getElementById('tpl-slug').value = e.target.value
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }
+});
+</script>
+</body>
+</html>
