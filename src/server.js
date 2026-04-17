@@ -90,7 +90,12 @@ app.post('/api/documents', requireApiKey, async (req, res) => {
     db.prepare('UPDATE documents SET status = ?, filename = ? WHERE id = ?').run('done', filename, docId);
 
     const base = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
-    res.json({ id: docId, status: 'done', url: `${base}/files/${filename}`, template_id: t.id, template_slug: t.slug });
+    const pdfUrl = `${base}/files/${filename}`;
+    res.json({
+      id: docId, status: 'done', url: pdfUrl,
+      template_id: t.id, template_slug: t.slug,
+      document_card: { download_url: pdfUrl }, // PDFMonkey-compatible
+    });
   } catch (e) {
     db.prepare('UPDATE documents SET status = ?, error = ? WHERE id = ?').run('error', e.message, docId);
     res.status(500).json({ error: e.message });
@@ -190,6 +195,35 @@ app.post('/api/preview-raw', async (req, res) => {
     }
     res.set('Content-Type', 'text/html'); res.send(fullHtml);
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ── Manual generate (session auth — for UI) ───────────────────────
+app.post('/api/generate', async (req, res) => {
+  const { template_id, data = {} } = req.body;
+  if (!template_id) return res.status(400).json({ error: 'template_id is required' });
+
+  const t = db.prepare('SELECT * FROM templates WHERE id = ? OR slug = ?').get(template_id, template_id);
+  if (!t) return res.status(404).json({ error: 'Template not found' });
+
+  const docId = uuidv4();
+  db.prepare('INSERT INTO documents (id, template_id, data, status) VALUES (?, ?, ?, ?)')
+    .run(docId, t.id, JSON.stringify(data), 'processing');
+
+  try {
+    const rendered = Handlebars.compile(t.html)(data);
+    const fullHtml = buildHtml(rendered, t.css);
+    const pdfBuf  = await generatePdf(fullHtml, t);
+    const filename = `${docId}.pdf`;
+
+    fs.writeFileSync(path.join(PDFS, filename), pdfBuf);
+    db.prepare('UPDATE documents SET status = ?, filename = ? WHERE id = ?').run('done', filename, docId);
+
+    const base = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+    res.json({ id: docId, status: 'done', url: `${base}/files/${filename}` });
+  } catch (e) {
+    db.prepare('UPDATE documents SET status = ?, error = ? WHERE id = ?').run('error', e.message, docId);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Documents ─────────────────────────────────────────────────────

@@ -128,6 +128,26 @@
   </div>
 </div>
 
+<!-- Generate PDF Modal -->
+<div id="generate-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+  <div class="card p-6 w-full mx-4" style="max-width:560px">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h3 class="font-semibold" id="gen-title">Generate PDF</h3>
+        <p class="text-slate-500 text-xs mt-0.5" id="gen-slug"></p>
+      </div>
+      <button class="text-slate-500 hover:text-slate-300 text-lg" onclick="closeGenerateModal()">✕</button>
+    </div>
+    <p class="text-slate-500 text-sm mb-2">Data (JSON) — edit values before generating:</p>
+    <textarea id="gen-data" class="input w-full font-mono text-xs" rows="10" style="resize:vertical"></textarea>
+    <div id="gen-error" class="hidden mt-2 bg-red-900/30 border border-red-800 text-red-400 rounded-lg px-3 py-2 text-xs font-mono"></div>
+    <div class="flex gap-3 justify-end mt-4">
+      <button class="btn-ghost" onclick="closeGenerateModal()">Cancel</button>
+      <button class="btn-primary" id="gen-btn" onclick="runGenerate()">↓ Generate PDF</button>
+    </div>
+  </div>
+</div>
+
 <!-- Delete Template Modal -->
 <div id="delete-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
   <div class="card p-6 max-w-sm w-full mx-4">
@@ -185,6 +205,7 @@ async function loadTemplates() {
         <span class="badge bg-[#1e2133] text-slate-400">${t.orientation}</span>
         <span class="ml-auto">${timeAgo(t.updated_at)}</span>
       </div>
+      <button class="mt-3 w-full btn-ghost text-xs py-1.5" onclick="event.stopPropagation();openGenerateModal('${t.id}','${esc(t.name)}','${esc(t.slug)}')">↓ Generate PDF</button>
     </div>
   `).join('');
 }
@@ -294,6 +315,57 @@ async function copyText(text, el) {
   el.textContent = 'Copied!';
   el.classList.add('text-green-400');
   setTimeout(() => { el.textContent = orig; el.classList.remove('text-green-400'); }, 1500);
+}
+
+// ── Generate PDF ──────────────────────────────────────────────────
+let genTemplateId = null;
+
+async function openGenerateModal(id, name, slug) {
+  genTemplateId = id;
+  document.getElementById('gen-title').textContent = `Generate PDF — ${name}`;
+  document.getElementById('gen-slug').textContent = slug;
+  document.getElementById('gen-error').classList.add('hidden');
+  document.getElementById('gen-btn').textContent = '↓ Generate PDF';
+  document.getElementById('gen-btn').disabled = false;
+
+  // Load sample_data from template
+  const res = await fetch(`/api/templates/${id}`);
+  const t = await res.json();
+  let sample = '{}';
+  try { sample = JSON.stringify(JSON.parse(t.sample_data || '{}'), null, 2); } catch(_) {}
+  document.getElementById('gen-data').value = sample;
+  document.getElementById('generate-modal').classList.remove('hidden');
+  document.getElementById('gen-data').focus();
+}
+
+function closeGenerateModal() {
+  genTemplateId = null;
+  document.getElementById('generate-modal').classList.add('hidden');
+}
+
+async function runGenerate() {
+  const btn = document.getElementById('gen-btn');
+  const errEl = document.getElementById('gen-error');
+  errEl.classList.add('hidden');
+  btn.textContent = 'Generating…'; btn.disabled = true;
+
+  let data = {};
+  try { data = JSON.parse(document.getElementById('gen-data').value || '{}'); }
+  catch(e) { errEl.textContent = 'Invalid JSON: ' + e.message; errEl.classList.remove('hidden'); btn.textContent = '↓ Generate PDF'; btn.disabled = false; return; }
+
+  const res = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ template_id: genTemplateId, data }),
+  });
+  const d = await res.json();
+  btn.textContent = '↓ Generate PDF'; btn.disabled = false;
+
+  if (!res.ok) { errEl.textContent = d.error || 'Generation failed'; errEl.classList.remove('hidden'); return; }
+
+  // Open PDF in new tab and refresh documents
+  window.open(d.url, '_blank');
+  closeGenerateModal();
 }
 
 // ── Import ────────────────────────────────────────────────────────
