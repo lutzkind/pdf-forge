@@ -25,6 +25,7 @@
   ::-webkit-scrollbar-thumb { background: #2d3148; border-radius: 3px; }
   .template-card:hover { border-color: #6366f1; }
   .tag { font-size: 11px; background: #1e2133; color: #818cf8; padding: 2px 8px; border-radius: 4px; font-family: monospace; }
+  select.input option { background: #1a1d27; }
 </style>
 </head>
 <body class="min-h-screen">
@@ -38,6 +39,7 @@
   <div class="flex gap-3">
     <button class="tab active" onclick="showTab('templates')">Templates</button>
     <button class="tab" onclick="showTab('documents')">Documents</button>
+    <button class="tab" onclick="showTab('webhooks')">Webhooks</button>
     <button class="tab" onclick="showTab('keys')">API Keys</button>
   </div>
   <div class="flex gap-2">
@@ -63,13 +65,84 @@
 
   <!-- Documents Tab -->
   <section id="tab-documents" class="hidden">
-    <div class="card overflow-hidden">
-      <div class="px-5 py-4 border-b border-[#2d3148] flex items-center justify-between">
-        <h2 class="font-semibold">Generated Documents</h2>
-        <button class="btn-ghost text-xs" onclick="loadDocuments()">Refresh</button>
+    <!-- Filter bar -->
+    <div class="card p-4 mb-4 flex flex-wrap gap-3 items-end">
+      <div class="flex-1 min-w-[180px]">
+        <label class="text-xs text-slate-500 mb-1 block">Search</label>
+        <input id="doc-search" class="input w-full text-sm" placeholder="Filename or ID…" oninput="filterDocuments()">
       </div>
+      <div class="min-w-[180px]">
+        <label class="text-xs text-slate-500 mb-1 block">Template</label>
+        <select id="doc-template" class="input w-full text-sm" onchange="filterDocuments()">
+          <option value="">All templates</option>
+        </select>
+      </div>
+      <div class="flex gap-4 items-center pt-4">
+        <label class="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
+          <input type="checkbox" id="doc-status-done" onchange="filterDocuments()" class="accent-indigo-500"> Done
+        </label>
+        <label class="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
+          <input type="checkbox" id="doc-status-error" onchange="filterDocuments()" class="accent-red-500"> Error
+        </label>
+      </div>
+      <button class="btn-ghost text-xs self-end" onclick="loadDocuments()">Refresh</button>
+    </div>
+
+    <div class="card overflow-hidden">
       <div id="documents-list" class="divide-y divide-[#2d3148]"></div>
-      <div id="documents-empty" class="hidden text-center py-12 text-slate-500">No documents generated yet</div>
+      <div id="documents-empty" class="hidden text-center py-12 text-slate-500">No documents found</div>
+    </div>
+  </section>
+
+  <!-- Webhooks Tab -->
+  <section id="tab-webhooks" class="hidden">
+    <div class="grid gap-6">
+      <div class="card p-5">
+        <h2 class="font-semibold mb-1">Add Webhook Endpoint</h2>
+        <p class="text-slate-500 text-sm mb-4">PDF Forge will POST to your URL when a document is generated or fails.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          <input id="wh-name" class="input" placeholder="Name (e.g. n8n trigger)" />
+          <input id="wh-url" class="input" placeholder="https://n8n.luxeillum.com/webhook/…" />
+        </div>
+        <div class="flex gap-3 mb-3">
+          <input id="wh-secret" class="input flex-1" placeholder="Secret (optional — used for HMAC signature)" />
+        </div>
+        <div class="flex gap-4 mb-4">
+          <label class="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
+            <input type="checkbox" id="wh-ev-done" checked class="accent-indigo-500"> document.done
+          </label>
+          <label class="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
+            <input type="checkbox" id="wh-ev-error" checked class="accent-red-500"> document.error
+          </label>
+        </div>
+        <button class="btn-primary" onclick="createWebhook()">Add Endpoint</button>
+      </div>
+
+      <div class="card overflow-hidden">
+        <div class="px-5 py-4 border-b border-[#2d3148]">
+          <h2 class="font-semibold">Endpoints</h2>
+        </div>
+        <div id="webhooks-list" class="divide-y divide-[#2d3148]"></div>
+        <div id="webhooks-empty" class="hidden text-center py-8 text-slate-500 text-sm">No webhook endpoints yet</div>
+      </div>
+
+      <div class="card p-5">
+        <h2 class="font-semibold mb-3">Payload format</h2>
+        <div class="bg-[#0f1117] rounded-lg p-4 mono text-xs text-slate-300">
+<pre>{
+  "event": "document.done",
+  "fired_at": "2026-04-17T10:00:00.000Z",
+  "document": {
+    "id": "uuid",
+    "status": "done",
+    "url": "https://pdf.luxeillum.com/files/uuid.pdf",
+    "template_id": "uuid",
+    "template_slug": "invoice"
+  }
+}</pre>
+        </div>
+        <p class="text-slate-500 text-xs mt-3">If a secret is set, requests include <code class="text-indigo-400">X-Webhook-Signature: sha256=…</code> for verification.</p>
+      </div>
     </div>
   </section>
 
@@ -163,6 +236,7 @@
 <script>
 let activeTab = 'templates';
 let deleteTargetId = null;
+let allDocs = [];
 
 const API = '';
 
@@ -171,11 +245,13 @@ function showTab(name) {
   activeTab = name;
   document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden'));
   document.getElementById(`tab-${name}`).classList.remove('hidden');
+  const tabs = ['templates','documents','webhooks','keys'];
   document.querySelectorAll('.tab').forEach((el, i) => {
-    el.classList.toggle('active', ['templates','documents','keys'][i] === name);
+    el.classList.toggle('active', tabs[i] === name);
   });
   if (name === 'documents') loadDocuments();
   if (name === 'keys')      loadKeys();
+  if (name === 'webhooks')  loadWebhooks();
 }
 
 // ── Templates ─────────────────────────────────────────────────────
@@ -188,14 +264,22 @@ async function loadTemplates() {
   if (!templates.length) { empty.classList.remove('hidden'); grid.innerHTML = ''; return; }
   empty.classList.add('hidden');
 
-  grid.innerHTML = templates.map(t => `
+  grid.innerHTML = templates.map(t => {
+    const dirty = t.published_at === null || (t.updated_at && t.published_at && new Date(t.updated_at + 'Z') > new Date(t.published_at + 'Z'));
+    const dirtyBadge = dirty
+      ? `<span class="badge bg-amber-900/40 text-amber-400 text-[10px]">Unpublished</span>`
+      : `<span class="badge bg-green-900/40 text-green-500 text-[10px]">Published</span>`;
+    return `
     <div class="card template-card p-5 transition-all cursor-pointer" onclick="editTemplate('${t.id}')">
-      <div class="flex items-start justify-between mb-3">
-        <div>
-          <h3 class="font-semibold text-sm mb-1">${esc(t.name)}</h3>
-          <span class="tag">${esc(t.slug)}</span>
+      <div class="flex items-start justify-between mb-2">
+        <div class="flex-1 min-w-0">
+          <h3 class="font-semibold text-sm mb-1 truncate">${esc(t.name)}</h3>
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="tag">${esc(t.slug)}</span>
+            ${dirtyBadge}
+          </div>
         </div>
-        <div class="flex gap-1 ml-2">
+        <div class="flex gap-1 ml-2 shrink-0">
           <button class="btn-ghost text-xs py-1 px-2" onclick="event.stopPropagation();editTemplate('${t.id}')">Edit</button>
           <button class="btn-danger text-xs py-1 px-2" onclick="event.stopPropagation();openDeleteModal('${t.id}')">Del</button>
         </div>
@@ -206,17 +290,12 @@ async function loadTemplates() {
         <span class="ml-auto">${timeAgo(t.updated_at)}</span>
       </div>
       <button class="mt-3 w-full btn-ghost text-xs py-1.5" onclick="event.stopPropagation();openGenerateModal('${t.id}','${esc(t.name)}','${esc(t.slug)}')">↓ Generate PDF</button>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
-function newTemplate() {
-  window.location.href = '/editor.html';
-}
-
-function editTemplate(id) {
-  window.location.href = `/editor.html?id=${id}`;
-}
+function newTemplate() { window.location.href = '/editor.html'; }
+function editTemplate(id) { window.location.href = `/editor.html?id=${id}`; }
 
 // ── Delete Modal ──────────────────────────────────────────────────
 function openDeleteModal(id) {
@@ -237,17 +316,51 @@ async function confirmDelete() {
 // ── Documents ─────────────────────────────────────────────────────
 async function loadDocuments() {
   const res  = await fetch(`${API}/api/documents`);
-  const docs = await res.json();
+  allDocs = await res.json();
+
+  // Populate template filter
+  const sel = document.getElementById('doc-template');
+  const prev = sel.value;
+  const seen = new Set();
+  sel.innerHTML = '<option value="">All templates</option>';
+  allDocs.forEach(d => {
+    if (d.template_id && !seen.has(d.template_id)) {
+      seen.add(d.template_id);
+      sel.innerHTML += `<option value="${d.template_id}">${esc(d.template_name || d.template_id)}</option>`;
+    }
+  });
+  sel.value = prev;
+
+  filterDocuments();
+}
+
+function filterDocuments() {
+  const q       = (document.getElementById('doc-search').value || '').toLowerCase();
+  const tmpl    = document.getElementById('doc-template').value;
+  const wantDone  = document.getElementById('doc-status-done').checked;
+  const wantError = document.getElementById('doc-status-error').checked;
+  const anyStatus = !wantDone && !wantError;
+
+  const filtered = allDocs.filter(d => {
+    if (tmpl && d.template_id !== tmpl) return false;
+    if (!anyStatus) {
+      if (wantDone && !wantError && d.status !== 'done') return false;
+      if (!wantDone && wantError && d.status !== 'error') return false;
+    }
+    if (q && !d.id.toLowerCase().includes(q) && !(d.filename||'').toLowerCase().includes(q)) return false;
+    return true;
+  });
+
   const list  = document.getElementById('documents-list');
   const empty = document.getElementById('documents-empty');
 
-  if (!docs.length) { empty.classList.remove('hidden'); list.innerHTML = ''; return; }
+  if (!filtered.length) { empty.classList.remove('hidden'); list.innerHTML = ''; return; }
   empty.classList.add('hidden');
 
-  list.innerHTML = docs.map(d => `
+  list.innerHTML = filtered.map(d => `
     <div class="px-5 py-3 flex items-center justify-between hover:bg-white/2">
       <div>
-        <div class="text-sm font-medium mb-0.5">${d.template_name || d.template_id}</div>
+        <div class="text-sm font-medium mb-0.5">${esc(d.template_name || d.template_id)}</div>
         <div class="text-xs text-slate-500 mono">${d.id.slice(0,8)}… · ${timeAgo(d.created_at)}</div>
       </div>
       <div class="flex items-center gap-3">
@@ -256,6 +369,58 @@ async function loadDocuments() {
       </div>
     </div>
   `).join('');
+}
+
+// ── Webhooks ──────────────────────────────────────────────────────
+async function loadWebhooks() {
+  const res   = await fetch(`${API}/api/webhooks`);
+  const hooks = await res.json();
+  const list  = document.getElementById('webhooks-list');
+  const empty = document.getElementById('webhooks-empty');
+
+  if (!hooks.length) { empty.classList.remove('hidden'); list.innerHTML = ''; return; }
+  empty.classList.add('hidden');
+
+  list.innerHTML = hooks.map(h => {
+    const events = JSON.parse(h.events || '[]');
+    return `
+    <div class="px-5 py-3 flex items-center justify-between">
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-medium mb-0.5">${esc(h.name)}</div>
+        <div class="mono text-xs text-indigo-400 truncate">${esc(h.url)}</div>
+        <div class="flex gap-2 mt-1">
+          ${events.map(e => `<span class="badge bg-[#1e2133] text-slate-400">${esc(e)}</span>`).join('')}
+          ${h.secret ? `<span class="badge bg-[#1e2133] text-slate-500">🔑 signed</span>` : ''}
+        </div>
+      </div>
+      <button class="btn-danger text-xs py-1 px-2 ml-4 shrink-0" onclick="deleteWebhook('${h.id}')">Remove</button>
+    </div>`;
+  }).join('');
+}
+
+async function createWebhook() {
+  const name   = document.getElementById('wh-name').value.trim();
+  const url    = document.getElementById('wh-url').value.trim();
+  const secret = document.getElementById('wh-secret').value.trim();
+  const events = [];
+  if (document.getElementById('wh-ev-done').checked)  events.push('document.done');
+  if (document.getElementById('wh-ev-error').checked) events.push('document.error');
+  if (!name || !url) return;
+
+  await fetch(`${API}/api/webhooks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, url, events, secret: secret || undefined }),
+  });
+  document.getElementById('wh-name').value = '';
+  document.getElementById('wh-url').value = '';
+  document.getElementById('wh-secret').value = '';
+  loadWebhooks();
+}
+
+async function deleteWebhook(id) {
+  await fetch(`${API}/api/webhooks/${id}`, { method: 'DELETE' });
+  loadWebhooks();
 }
 
 // ── API Keys ──────────────────────────────────────────────────────
@@ -298,7 +463,7 @@ async function deleteKey(id) {
 
 // ── Utils ─────────────────────────────────────────────────────────
 function esc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function timeAgo(dateStr) {
@@ -328,7 +493,6 @@ async function openGenerateModal(id, name, slug) {
   document.getElementById('gen-btn').textContent = '↓ Generate PDF';
   document.getElementById('gen-btn').disabled = false;
 
-  // Load sample_data from template
   const res = await fetch(`/api/templates/${id}`);
   const t = await res.json();
   let sample = '{}';
@@ -363,7 +527,6 @@ async function runGenerate() {
 
   if (!res.ok) { errEl.textContent = d.error || 'Generation failed'; errEl.classList.remove('hidden'); return; }
 
-  // Open PDF in new tab and refresh documents
   window.open(d.url, '_blank');
   closeGenerateModal();
 }

@@ -64,6 +64,7 @@
   </div>
 
   <div class="ml-auto flex items-center gap-2">
+    <span id="dirty-badge" class="hidden text-[11px] px-2 py-0.5 rounded-full bg-amber-900/40 text-amber-400">Unsaved changes</span>
     <div id="save-status" class="text-xs text-slate-500"></div>
     <button class="btn-ghost" onclick="previewPdf()">
       <span id="pdf-btn-label">Preview PDF</span>
@@ -71,6 +72,7 @@
     <button class="btn-primary" onclick="saveTemplate()">
       <span id="save-btn-label">Save</span>
     </button>
+    <button id="publish-btn" class="btn-green hidden" onclick="publishTemplate()" title="Mark as published">Publish</button>
   </div>
 </header>
 
@@ -145,6 +147,36 @@ let templateId = null;
 let previewMode = 'html';
 let livePreviewTimer = null;
 let isSaving = false;
+let isDirty = false;
+let savedSnapshot = null;
+
+function getSnapshot() {
+  return JSON.stringify({
+    html: editors.html?.getValue(),
+    css:  editors.css?.getValue(),
+    data: editors.data?.getValue(),
+    name: document.getElementById('tpl-name').value,
+    slug: document.getElementById('tpl-slug').value,
+    size: document.getElementById('tpl-size').value,
+    orient: document.getElementById('tpl-orient').value,
+    mgt: document.getElementById('mg-top').value,
+    mgr: document.getElementById('mg-right').value,
+    mgb: document.getElementById('mg-bottom').value,
+    mgl: document.getElementById('mg-left').value,
+  });
+}
+
+function markDirty() {
+  if (savedSnapshot === null) return;
+  isDirty = getSnapshot() !== savedSnapshot;
+  document.getElementById('dirty-badge').classList.toggle('hidden', !isDirty);
+}
+
+function markClean() {
+  savedSnapshot = getSnapshot();
+  isDirty = false;
+  document.getElementById('dirty-badge').classList.add('hidden');
+}
 
 // ── Init Monaco ───────────────────────────────────────────────────
 require(['vs/editor/editor.main'], function() {
@@ -189,9 +221,9 @@ require(['vs/editor/editor.main'], function() {
     value: DEFAULT_DATA,
   });
 
-  // Live preview on change (debounced)
+  // Live preview on change (debounced) + dirty tracking
   ['html','css','data'].forEach(k => {
-    editors[k].onDidChangeModelContent(() => scheduleLivePreview());
+    editors[k].onDidChangeModelContent(() => { scheduleLivePreview(); markDirty(); });
   });
   editors.data.onDidChangeModelContent(() => updateVarsBar());
 
@@ -339,6 +371,14 @@ async function loadFromUrl() {
   editors.data.setValue(t.sample_data && t.sample_data !== '{}' ? t.sample_data : DEFAULT_DATA);
   updateVarsBar();
   scheduleLivePreview();
+
+  // Show publish button and set dirty state based on published_at vs updated_at
+  document.getElementById('publish-btn').classList.remove('hidden');
+  const unpublished = !t.published_at || new Date(t.updated_at + 'Z') > new Date(t.published_at + 'Z');
+  if (unpublished) {
+    document.getElementById('dirty-badge').classList.remove('hidden');
+  }
+  markClean(); // reset dirty to track future edits
 }
 
 // ── Editor tabs ───────────────────────────────────────────────────
@@ -490,6 +530,7 @@ async function saveTemplate() {
       document.getElementById('tpl-slug').value = t.slug;
     }
     document.title = `${t.name} — PDF Forge`;
+    markClean();
     status.textContent = 'Saved';
     status.className = 'text-xs text-green-400';
     setTimeout(() => { status.textContent = ''; }, 2000);
@@ -497,6 +538,20 @@ async function saveTemplate() {
     label.textContent = 'Save';
     isSaving = false;
   }
+}
+
+// ── Publish ───────────────────────────────────────────────────────
+async function publishTemplate() {
+  if (!templateId) { await saveTemplate(); }
+  if (!templateId) return;
+  const btn = document.getElementById('publish-btn');
+  btn.textContent = 'Publishing…';
+  await fetch(`/api/templates/${templateId}/publish`, { method: 'POST' });
+  btn.textContent = 'Publish';
+  const status = document.getElementById('save-status');
+  status.textContent = 'Published ✓';
+  status.className = 'text-xs text-green-400';
+  setTimeout(() => { status.textContent = ''; }, 2000);
 }
 
 // ── Variables bar ─────────────────────────────────────────────────
@@ -579,12 +634,16 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// Auto-slug from name
+// Auto-slug from name + dirty tracking on field changes
 document.getElementById('tpl-name').addEventListener('input', e => {
   if (!templateId) {
     document.getElementById('tpl-slug').value = e.target.value
       .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   }
+  markDirty();
+});
+['tpl-slug','tpl-size','tpl-orient','mg-top','mg-right','mg-bottom','mg-left'].forEach(id => {
+  document.getElementById(id).addEventListener('input', markDirty);
 });
 </script>
 </body>

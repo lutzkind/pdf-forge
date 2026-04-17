@@ -46,7 +46,20 @@ db.exec(`
     key        TEXT UNIQUE NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS webhooks (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    url        TEXT NOT NULL,
+    events     TEXT NOT NULL DEFAULT '["document.done","document.error"]',
+    secret     TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
 `);
+
+// Migrations — safe to run repeatedly
+try { db.exec('ALTER TABLE templates ADD COLUMN published_at DATETIME'); } catch (_) {}
 
 module.exports = db;
 module.exports.DATA_DIR = DATA_DIR;

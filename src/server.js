@@ -2,6 +2,7 @@ const express  = require('express');
 const session  = require('express-session');
 const path     = require('path');
 const fs       = require('fs');
+const crypto   = require('crypto');
 const axios    = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const Handlebars = require('handlebars');
@@ -91,6 +92,7 @@ app.post('/api/documents', requireApiKey, async (req, res) => {
 
     const base = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
     const pdfUrl = `${base}/files/${filename}`;
+    fireWebhooks('document.done', { id: docId, status: 'done', url: pdfUrl, template_id: t.id, template_slug: t.slug });
     res.json({
       id: docId, status: 'done', url: pdfUrl,
       template_id: t.id, template_slug: t.slug,
@@ -98,6 +100,7 @@ app.post('/api/documents', requireApiKey, async (req, res) => {
     });
   } catch (e) {
     db.prepare('UPDATE documents SET status = ?, error = ? WHERE id = ?').run('error', e.message, docId);
+    fireWebhooks('document.error', { id: docId, status: 'error', error: e.message, template_id: t.id, template_slug: t.slug });
     res.status(500).json({ error: e.message });
   }
 });
@@ -125,7 +128,7 @@ app.use(express.static(path.join(__dirname, '../public')));
 // ── Templates ─────────────────────────────────────────────────────
 app.get('/api/templates', (_req, res) => {
   res.json(db.prepare(
-    'SELECT id, name, slug, page_size, orientation, created_at, updated_at FROM templates ORDER BY created_at DESC'
+    'SELECT id, name, slug, page_size, orientation, created_at, updated_at, published_at FROM templates ORDER BY created_at DESC'
   ).all());
 });
 
@@ -231,20 +234,29 @@ app.post('/api/generate', async (req, res) => {
     db.prepare('UPDATE documents SET status = ?, filename = ? WHERE id = ?').run('done', filename, docId);
 
     const base = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
-    res.json({ id: docId, status: 'done', url: `${base}/files/${filename}` });
+    const pdfUrl2 = `${base}/files/${filename}`;
+    fireWebhooks('document.done', { id: docId, status: 'done', url: pdfUrl2, template_id: t.id, template_slug: t.slug });
+    res.json({ id: docId, status: 'done', url: pdfUrl2 });
   } catch (e) {
     db.prepare('UPDATE documents SET status = ?, error = ? WHERE id = ?').run('error', e.message, docId);
+    fireWebhooks('document.error', { id: docId, status: 'error', error: e.message, template_id: t.id, template_slug: t.slug });
     res.status(500).json({ error: e.message });
   }
 });
 
 // ── Documents ─────────────────────────────────────────────────────
-app.get('/api/documents', (_req, res) => {
+app.get('/api/documents', (req, res) => {
+  const { template_id, status, q } = req.query;
+  let where = 'WHERE 1=1';
+  const params = [];
+  if (template_id) { where += ' AND d.template_id = ?'; params.push(template_id); }
+  if (status)      { where += ' AND d.status = ?';      params.push(status); }
+  if (q)           { where += ' AND (d.id LIKE ? OR d.filename LIKE ?)'; params.push(`%${q}%`, `%${q}%`); }
   const docs = db.prepare(`
     SELECT d.*, t.name AS template_name, t.slug AS template_slug
     FROM documents d LEFT JOIN templates t ON d.template_id = t.id
-    ORDER BY d.created_at DESC LIMIT 200
-  `).all();
+    ${where} ORDER BY d.created_at DESC LIMIT 200
+  `).all(...params);
   const base = process.env.BASE_URL || 'http://localhost:3000';
   res.json(docs.map(d => ({ ...d, url: d.filename ? `${base}/files/${d.filename}` : null })));
 });
@@ -340,6 +352,49 @@ app.post('/api/import/pdfmonkey', async (req, res) => {
   }
 
   res.json({ imported: results.filter(r => r.status === 'imported').length, total: templates.length, results });
+});
+
+// ── Webhooks ──────────────────────────────────────────────────────
+app.get('/api/webhooks', (_req, res) => {
+  res.json(db.prepare('SELECT * FROM webhooks ORDER BY created_at DESC').all());
+});
+
+app.post('/api/webhooks', (req, res) => {
+  const { name, url, events = ['document.done', 'document.error'], secret } = req.body;
+  if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
+  const id = uuidv4();
+  db.prepare('INSERT INTO webhooks (id, name, url, events, secret) VALUES (?, ?, ?, ?, ?)')
+    .run(id, name, url, JSON.stringify(events), secret || null);
+  res.status(201).json(db.prepare('SELECT * FROM webhooks WHERE id = ?').get(id));
+});
+
+app.delete('/api/webhooks/:id', (req, res) => {
+  db.prepare('DELETE FROM webhooks WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+async function fireWebhooks(event, payload) {
+  const hooks = db.prepare('SELECT * FROM webhooks').all();
+  for (const hook of hooks) {
+    const events = JSON.parse(hook.events || '[]');
+    if (!events.includes(event)) continue;
+    const body = JSON.stringify({ event, document: payload, fired_at: new Date().toISOString() });
+    const headers = { 'Content-Type': 'application/json' };
+    if (hook.secret) {
+      headers['x-webhook-signature'] = 'sha256=' + crypto.createHmac('sha256', hook.secret).update(body).digest('hex');
+    }
+    axios.post(hook.url, body, { headers, timeout: 10000 }).catch(e =>
+      console.error(`[webhook] ${hook.url} failed: ${e.message}`)
+    );
+  }
+}
+
+// ── Publish template ──────────────────────────────────────────────
+app.post('/api/templates/:id/publish', (req, res) => {
+  const t = db.prepare('SELECT * FROM templates WHERE id = ?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Template not found' });
+  db.prepare('UPDATE templates SET published_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+  res.json(db.prepare('SELECT * FROM templates WHERE id = ?').get(req.params.id));
 });
 
 // ── Helpers ───────────────────────────────────────────────────────
