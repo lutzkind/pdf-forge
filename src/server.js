@@ -105,8 +105,20 @@ app.post('/api/documents', requireApiKey, async (req, res) => {
 // ── Protected static files ────────────────────────────────────────
 app.use('/files', express.static(PDFS));
 
+// API routes accept either session login OR API key
+function requireAuth(req, res, next) {
+  if (isLoggedIn(req)) return next();
+  const key = req.headers['x-api-key'] || req.query.api_key;
+  if (key) {
+    const row = db.prepare('SELECT id FROM api_keys WHERE key = ?').get(key);
+    if (row) return next();
+  }
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Login or API key required' });
+  res.redirect('/login.html');
+}
+
 // All other routes require login
-app.use(requireLogin);
+app.use(requireAuth);
 
 app.use(express.static(path.join(__dirname, '../public')));
 
