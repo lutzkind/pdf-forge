@@ -14,7 +14,6 @@ ENV PORT=3000
 ENV DATA_DIR=/data
 ENV NODE_ENV=production
 
-VOLUME ["/data"]
 EXPOSE 3000
 
 CMD ["node", "src/server.js"]
